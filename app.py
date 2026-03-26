@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -44,13 +45,13 @@ def collect_farmer_input() -> FarmerInput:
     )
 
 
-def save_output(report: str) -> Path:
+def save_output(report: dict) -> Path:
     output_dir = Path("outputs")
     output_dir.mkdir(exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = output_dir / f"weekly_advisory_{timestamp}.md"
-    output_file.write_text(report, encoding="utf-8")
+    output_file = output_dir / f"weekly_advisory_{timestamp}.json"
+    output_file.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return output_file
 
 
@@ -72,9 +73,9 @@ def main() -> None:
     print("\nGenerating weekly advisory roadmap...\n")
     advisory = generate_weekly_advisory(farmer_input, weather_data, soil_data, config)
 
-    print(advisory)
+    print(json.dumps(advisory, indent=2))
     output_file = save_output(advisory)
-    print(f"\nSaved advisory to: {output_file}")
+    print(f"\nSaved advisory JSON to: {output_file}")
 
 
 if __name__ == "__main__":
