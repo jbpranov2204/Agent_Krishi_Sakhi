@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import json
-from datetime import datetime
-from pathlib import Path
+from typing import Any
+
+from flask import Flask, jsonify, request
 
 from krishi_agent.advisory import generate_weekly_advisory
 from krishi_agent.clients import fetch_combined_data
@@ -10,31 +10,49 @@ from krishi_agent.config import AppConfig
 from krishi_agent.models import FarmerInput
 
 
-def _ask_bool(prompt: str) -> bool:
-    while True:
-        value = input(prompt).strip().lower()
-        if value in {"yes", "y"}:
+app = Flask(__name__)
+
+
+def _parse_irrigation(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"yes", "y", "true", "1"}:
             return True
-        if value in {"no", "n"}:
+        if normalized in {"no", "n", "false", "0"}:
             return False
-        print("Please enter yes or no.")
+
+    raise ValueError("'irrigation' must be a boolean or one of: yes/no, true/false, 1/0")
 
 
-def _ask_float(prompt: str) -> float:
-    while True:
-        value = input(prompt).strip()
-        try:
-            return float(value)
-        except ValueError:
-            print("Please enter a valid number.")
+def _build_farmer_input(payload: dict[str, Any]) -> FarmerInput:
+    required_fields = ["location", "crop_type", "land_size", "irrigation", "experience_level"]
+    missing = [field for field in required_fields if field not in payload]
+    if missing:
+        raise ValueError(f"Missing required fields: {', '.join(missing)}")
 
+    location = str(payload["location"]).strip()
+    crop_type = str(payload["crop_type"]).strip()
+    experience_level = str(payload["experience_level"]).strip()
 
-def collect_farmer_input() -> FarmerInput:
-    location = input("Location (city name): ").strip()
-    crop_type = input("Crop type: ").strip()
-    land_size = _ask_float("Land size (in acres): ")
-    irrigation = _ask_bool("Irrigation available? (yes/no): ")
-    experience_level = input("Experience level (beginner/intermediate/expert): ").strip()
+    if not location:
+        raise ValueError("'location' cannot be empty")
+    if not crop_type:
+        raise ValueError("'crop_type' cannot be empty")
+    if not experience_level:
+        raise ValueError("'experience_level' cannot be empty")
+
+    try:
+        land_size = float(payload["land_size"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("'land_size' must be a valid number") from exc
+
+    if land_size <= 0:
+        raise ValueError("'land_size' must be greater than 0")
+
+    irrigation = _parse_irrigation(payload["irrigation"])
 
     return FarmerInput(
         location=location,
@@ -45,38 +63,55 @@ def collect_farmer_input() -> FarmerInput:
     )
 
 
-def save_output(report: dict) -> Path:
-    output_dir = Path("outputs")
-    output_dir.mkdir(exist_ok=True)
+@app.get("/")
+def root() -> tuple[Any, int]:
+    return jsonify({
+        "service": "Krishi Advisory API",
+        "version": "1.0.0",
+        "endpoints": {
+            "health": "GET /health",
+            "advisory": "POST /api/advisory",
+        },
+        "usage": {
+            "post_endpoint": "POST /api/advisory with JSON",
+            "required_fields": ["location", "crop_type", "land_size", "irrigation", "experience_level"],
+            "example": {
+                "location": "Bengaluru",
+                "crop_type": "Paddy",
+                "land_size": 2.5,
+                "irrigation": True,
+                "experience_level": "beginner"
+            }
+        }
+    }), 200
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = output_dir / f"weekly_advisory_{timestamp}.json"
-    output_file.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    return output_file
+
+@app.get("/health")
+def health() -> tuple[Any, int]:
+    return jsonify({"status": "ok"}), 200
 
 
-def main() -> None:
-    print("=== Krishi Weekly Advisory Agent (CrewAI) ===")
+@app.post("/api/advisory")
+def advisory() -> tuple[Any, int]:
+    if not request.is_json:
+        return jsonify({"error": "Content-Type must be application/json"}), 400
 
-    config = AppConfig.from_env()
-    farmer_input = collect_farmer_input()
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Request body must be a JSON object"}), 400
 
-    print(f"\nFetching weather and soil data for {farmer_input.location}...")
     try:
+        config = AppConfig.from_env()
+        farmer_input = _build_farmer_input(payload)
         weather_data, soil_data = fetch_combined_data(farmer_input.location, config)
-        print(f"✓ Weather data fetched")
-        print(f"✓ Polygon created and soil data fetched")
-    except Exception as e:
-        print(f"✗ Error fetching data: {e}")
-        return
+        advisory_data = generate_weekly_advisory(farmer_input, weather_data, soil_data, config)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"error": "Failed to generate advisory", "details": str(exc)}), 500
 
-    print("\nGenerating weekly advisory roadmap...\n")
-    advisory = generate_weekly_advisory(farmer_input, weather_data, soil_data, config)
-
-    print(json.dumps(advisory, indent=2))
-    output_file = save_output(advisory)
-    print(f"\nSaved advisory JSON to: {output_file}")
+    return jsonify(advisory_data), 200
 
 
 if __name__ == "__main__":
-    main()
+    app.run(host="0.0.0.0", port=5000, debug=True)

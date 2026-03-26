@@ -57,7 +57,46 @@ Then it fetches weather + soil data and generates a custom 7-day roadmap.
 
 Output file is saved under outputs/.
 
-## 3) API Notes
+## 3) Run Flask API
+
+1. Install dependencies:
+
+```powershell
+pip install -r requirements.txt
+```
+
+2. Start API server:
+
+```powershell
+python api.py
+```
+
+3. Health check:
+
+```powershell
+Invoke-RestMethod -Method GET http://localhost:5000/health
+```
+
+4. Generate advisory (POST):
+
+```powershell
+$body = @{
+  location = "Bengaluru"
+  crop_type = "Paddy"
+  land_size = 2
+  irrigation = $true
+  experience_level = "beginner"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method POST `
+  -Uri http://localhost:5000/api/advisory `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+The API returns the advisory as nested JSON.
+
+## 4) API Notes
 
 - Weather API request uses query params lat, lon, units, appid (if key provided).
 - Soil API request uses lat, lon. If SOIL_API_KEY is set, it sends Authorization: Bearer <key>.
